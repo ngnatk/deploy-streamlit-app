@@ -126,9 +126,9 @@ def main():
     st.caption(f"🚀 Powered by | Model: {MODEL_ID}")
 
     config = Config(
-        read_timeout=10000,
-        connect_timeout=600,
-        retries={"max_attempts": 3}
+        # read_timeout=10000,
+        # connect_timeout=600,
+        # retries={"max_attempts": 3}
     )
 
     # Initialize Bedrock client using Streamlit secrets
