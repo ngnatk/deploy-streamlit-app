@@ -55,11 +55,11 @@ MODEL_OPTIONS = {
     "Nova Lite Reasoning": "arn:aws:bedrock:us-east-1:963067361214:provisioned-model/dx9g06qbz7f6",
 }
 
-def main():
-    # App configuration
-    st.set_page_config(page_title="Amazon Bedrock Reasoning Capability Test Platform", layout="wide")
-    st.title("💬 Amazon Bedrock Reasoning Capability Test Platform")
+# App configuration
+st.set_page_config(page_title="Amazon Bedrock Reasoning Capability Test Platform", layout="wide")
+st.title("💬 Amazon Bedrock Reasoning Capability Test Platform")
 
+def main():
     # Sidebar for configuration
     with st.sidebar:
         st.header("Configuration")
