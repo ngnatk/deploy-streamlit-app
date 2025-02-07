@@ -1,5 +1,8 @@
 #!/usr/bin/env python
 
+# This has been adapted from:
+# - https://github.com/girishp1983/streamlit-examples-for-bedrock
+
 import json
 import boto3
 import streamlit as st
