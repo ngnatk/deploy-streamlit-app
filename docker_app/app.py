@@ -3,23 +3,24 @@
 # This has been adapted from:
 # - https://github.com/girishp1983/streamlit-examples-for-bedrock
 
-import json
 import boto3
+import config_file
+import json
 import streamlit as st
 
 from botocore.config import Config
 from utils.auth import Auth
 from utils.llm import Llm
-from config_file import Config
+
 
 # App configuration
 st.set_page_config(page_title="Amazon Bedrock Reasoning Capability Test Platform", layout="wide")
 
 # ID of Secrets Manager containing cognito parameters
-secrets_manager_id = Config.SECRETS_MANAGER_ID
+secrets_manager_id = config_file.Config.SECRETS_MANAGER_ID
 
 # ID of the AWS region in which Secrets Manager is deployed
-region = Config.DEPLOYMENT_REGION
+region = config_file.Config.DEPLOYMENT_REGION
 
 # Initialise CognitoAuthenticator
 authenticator = Auth.get_authenticator(secrets_manager_id, region)
@@ -129,9 +130,9 @@ def main():
     st.caption(f"🚀 Powered by | Model: {MODEL_ID}")
 
     config = Config(
-        # read_timeout=10000,
-        # connect_timeout=600,
-        # retries={"max_attempts": 3}
+        read_timeout=10000,
+        connect_timeout=600,
+        retries={"max_attempts": 3}
     )
 
     # Initialize Bedrock client using Streamlit secrets
