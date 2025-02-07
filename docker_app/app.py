@@ -9,6 +9,9 @@ from utils.auth import Auth
 from utils.llm import Llm
 from config_file import Config
 
+# App configuration
+st.set_page_config(page_title="Amazon Bedrock Reasoning Capability Test Platform", layout="wide")
+
 # ID of Secrets Manager containing cognito parameters
 secrets_manager_id = Config.SECRETS_MANAGER_ID
 
@@ -55,11 +58,9 @@ MODEL_OPTIONS = {
     "Nova Lite Reasoning": "arn:aws:bedrock:us-east-1:963067361214:provisioned-model/dx9g06qbz7f6",
 }
 
-# App configuration
-st.set_page_config(page_title="Amazon Bedrock Reasoning Capability Test Platform", layout="wide")
-st.title("💬 Amazon Bedrock Reasoning Capability Test Platform")
-
 def main():
+    st.title("💬 Amazon Bedrock Reasoning Capability Test Platform")
+
     # Sidebar for configuration
     with st.sidebar:
         st.header("Configuration")
