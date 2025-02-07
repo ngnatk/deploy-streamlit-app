@@ -132,7 +132,7 @@ class CdkStack(Stack):
         bedrock_policy = iam.Policy(self, f"{prefix}BedrockPolicy",
                                     statements=[
                                         iam.PolicyStatement(
-                                            actions=["bedrock:InvokeModel"],
+                                            actions=["bedrock:InvokeModel","ssm:GetParameter"],
                                             resources=["*"]
                                         )
                                     ]
