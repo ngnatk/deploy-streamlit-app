@@ -133,6 +133,7 @@ class CdkStack(Stack):
                                     statements=[
                                         iam.PolicyStatement(
                                             actions=[
+                                                "bedrock:GetAsyncInvoke",
                                                 "bedrock:InvokeModel",
                                                 "dynamodb:GetItem",
                                                 "dynamodb:PutItem",
