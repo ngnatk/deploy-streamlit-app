@@ -295,7 +295,7 @@ def get_table_items(table_name, status_filter='InProgress'):
 
 
 def tab_canvas():
-    prompt = st.text_area("Enter your image prompt:", height=100)
+    prompt = st.text_area("Enter your image prompt:", height=150)
 
     # Model parameters
     with st.sidebar:
@@ -358,7 +358,7 @@ def tab_background_removal():
 
 def tab_reel():
     # img = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
-    video_prompt = st.text_area("Enter your video prompt:", height=120)
+    video_prompt = st.text_area("Enter your video prompt:", height=150)
 
     if st.button("Generate Video"):
         if video_prompt:
