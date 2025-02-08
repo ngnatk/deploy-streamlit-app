@@ -18,6 +18,8 @@ import random
 import streamlit as st
 
 from amazon_image_gen import BedrockImageGenerator
+from boto3.dynamodb.conditions import Attr
+from botocore.exceptions import ClientError
 from utils.auth import Auth
 
 # Setup Logging
@@ -30,13 +32,16 @@ st.set_page_config(
     layout="wide"
 )
 st.title("🌇 Image and Video Generation with Amazon Nova 🎨")
-output_folder="output"
+output_folder = "output"
 
 # Setup AWS
 bedrock_runtime = boto3.client('bedrock-runtime')
 s3_client = boto3.client("s3")
 ssm = boto3.client('ssm')
+dynamodb = boto3.client('dynamodb')
+sts = boto3.client('sts')
 
+AWS_ACCOUNT_ID = sts.get_caller_identity().get('Account')
 response = ssm.get_parameter(Name='/streamlit/STREAMLIT_S3_BUCKET')
 STREAMLIT_S3_BUCKET = response['Parameter']['Value']
 response = ssm.get_parameter(Name='/streamlit/DYNAMODB_TABLE')
@@ -54,10 +59,12 @@ authenticator = Auth.get_authenticator(secrets_manager_id, region)
 # Authenticate user, and stop here if not logged in
 is_logged_in = authenticator.login()
 if not is_logged_in:
+    logging.info("st.stop()")
     st.stop()
 
 
 def logout():
+    logging.info("authenticator.logout()")
     authenticator.logout()
 
 
@@ -66,7 +73,8 @@ with st.sidebar:
     st.button("Logout", "logout_btn", on_click=logout)
 
 
-def generate_image(prompt, negative_prompt, quality="standard", seed=None, width=1280, height=720, num_images=1):
+
+def generate_image(prompt, negative_prompt, quality="standard", seed=None, width=1280, height=720, cfgScale=7.0, num_images=1):
     """
     Generate images using Nova Canvas
     """
@@ -85,7 +93,7 @@ def generate_image(prompt, negative_prompt, quality="standard", seed=None, width
             "quality": quality,  # Allowed values are "standard" and "premium"
             "width": width,  # See README for supported output resolutions
             "height": height,  # See README for supported output resolutions
-            "cfgScale": 7.0,  # How closely the prompt will be followed
+            "cfgScale": cfgScale,  # How closely the prompt will be followed
             "seed": seed
         },
     }
@@ -164,7 +172,7 @@ def generate_video(s3_destination_bucket, video_prompt, model_id="amazon.nova-re
         invocation = bedrock_runtime.start_async_invoke(
             modelId=model_id,
             modelInput=model_input,
-            outputDataConfig={"s3OutputDataConfig": {"s3Uri": f"s3://{s3_destination_bucket}/nova"}},
+            outputDataConfig={"s3OutputDataConfig": {"s3Uri": f"s3://{s3_destination_bucket}"}},
         )
 
         # Store the invocation ARN
@@ -242,19 +250,47 @@ def job_json_from_arn(invocation_arn):
 
     return {
         'id': job_id,
-        'status': status,
         'submit_time': submit_time,
+        'status': status,
         's3_uri': s3_uri
     }
 
 
-
 def item_to_dynamodb(table, item):
-    response = dynamodb.put_item(
-        TableName=table,
-        Item=item
-    )
+    logging.info(item)
+    if isinstance(item['submit_time'], datetime.date):
+        item['submit_time'] = item['submit_time'].isoformat()
+
+    try:
+        response = dynamodb.put_item(
+            TableName=table,
+            Item={
+                'id': {'S': item['id']},
+                'prompt': {'S': item['prompt']},
+                'submit_time': {'S': item['submit_time']},
+                'status': {'S': item['status']},
+                's3_uri': {'S': item['s3_uri']}
+            }
+        )
+    except ClientError as err:
+        logger.error(
+            f"DynamoDB: couldn't add item: {item}",
+            table,
+            err.response["Error"]["Code"],
+            err.response["Error"]["Message"],
+        )
+        raise
     return response
+
+
+def get_table_items(table_name, status_filter='InProgress'):
+    table = boto3.resource('dynamodb').Table(table_name)
+    response = table.scan(
+        FilterExpression=Attr('status').eq(status_filter)
+    )
+    items = response['Items']
+    return items
+
 
 
 
@@ -272,12 +308,15 @@ def tab_canvas():
             options=[512, 768, 1024], value=512)
         height = st.select_slider("Image Height", 
             options=[512, 768, 1024], value=512)
+        cfgRange = [1.1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10]
+        cfgScale = st.select_slider("cfgScale", 
+            options=cfgRange, value=7.0)
 
     if st.button("Generate Image"):
         if prompt:
             try:
                 with st.spinner():
-                    response, image = generate_image(prompt, negative_prompt, quality, seed, width, height)
+                    response, image = generate_image(prompt, negative_prompt, quality, seed, width, height, cfgScale)
                     
                     if 'images' in response:
                         # Decode and display the generated image
@@ -302,63 +341,90 @@ def tab_background_removal():
         st.image(img, caption="Uploaded Image", use_container_width=True)
 
         # Convert image to bytes, encode to base64
-        img_bytes = img.read()
+        img_bytes = img.getvalue()
         img_base64 = base64.b64encode(img_bytes).decode("utf-8")
 
         # Remove background and display the image
         with st.spinner():
-            response, response_image = remove_background(img_base64)
-            st.image(response_image, caption="Processed Image", use_container_width=True)
+            try:
+                response, image = remove_background(img_base64)
+            except Exception as e:
+                st.error(f"Error removing background: {str(e)}")
+                # st.info(json.dumps(response, indent=2, default=str))
+            else:
+                st.image(image, caption="Processed Image", use_container_width=True)
 
 
 
 def tab_reel():
     # img = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
-    prompt = st.text_area("Enter your video prompt:", height=100)
+    video_prompt = st.text_area("Enter your video prompt:", height=120)
 
     if st.button("Generate Video"):
-        if prompt:
+        if video_prompt:
             try:
                 arn = generate_video(
                     s3_destination_bucket = STREAMLIT_S3_BUCKET,
-                    video_prompt = prompt
+                    video_prompt = video_prompt
                 )
+            except Exception as e:
+                st.error(f"Error generating video: {str(e)}")
+            else:
                 st.session_state.invocation_arn = arn
-
                 st.success(f"Video generation job started: {arn}")
-                st.markdown(f"response = {json.dumps(response, indent=2, default=str)}")
+                # st.markdown(f"```json\n{json.dumps(response, indent=2, default=str)}\n```")
+
+            try:
                 job_json = job_json_from_arn(arn)
+                job_json['prompt'] = video_prompt
+                logging.info(job_json)
                 item_to_dynamodb(DYNAMODB_TABLE, job_json)
 
             except Exception as e:
-                st.error(f"Error generating video: {str(e)}")
+                st.error(f"Error saving to dynamo db: {str(e)}")
         else:
             st.warning("Please enter a prompt to generate a video")
 
 
 
 def tab_videos():
-    inprogress_job_args = {"statusEquals": "InProgress"}
-    inprogress_jobs = bedrock_runtime.list_async_invokes(**inprogress_job_args)
-    for job in inprogress_jobs["asyncInvokeSummaries"]:
-        status = job["status"]
-        st.status(f"Job status: {status}")
+    # Check video status change from 'InProgress' to 'Completed'
+    items_inprogress = get_table_items('NovaVideos', status_filter='InProgress')
+    logging.info(f"len(items_inprogress) = {len(items_inprogress)}")
+    for item in items_inprogress:
+        id = item['id']
+        status = item['status']
+        if status == 'InProgress':
+            st.info(f"Job: {id} (InProgress)")
+            item_str = json.dumps(item, indent=2, default=str)
+            logging.info(item_str)
+            arn = f'arn:aws:bedrock:us-east-1:{AWS_ACCOUNT_ID}:async-invoke/{id}'
+            job_json = job_json_from_arn(arn)
+            new_status = job_json['status']
+            if new_status != status:
+                logging.info(f"{id}: {status} -> {new_status}")
+                item_to_dynamodb(DYNAMODB_TABLE, job_json)
+                # Copy the file fro the S3 bucket to temporary storage
+                s3_client.download_file(STREAMLIT_S3_BUCKET, f'{id}/output.mp4', f'{id}.mp4')
 
-    completed_jobs_args = {"statusEquals": "Completed"}
-    completed_jobs = bedrock_runtime.list_async_invokes(**completed_jobs_args)
-    for job in completed_jobs["asyncInvokeSummaries"]:
-        job_folder_name = amazon_video_util.get_folder_name_for_job(job)
-        invocation_id = job['invocationArn'].split("/")[-1]
+    items_completed = get_table_items('NovaVideos', status_filter='Completed')
+    logging.info(f"len(items_completed) = {len(items_completed)}")
+
+    for i, item in enumerate(items_completed):
+        invocation_id = item['id']
+        status = item['status']
+        prompt = item.get('prompt', '')
         filename = f"{invocation_id}.mp4"
-        file_path = f"{output_folder}/{job_folder_name}/{filename}"
-        if not os.path.isfile(file_path):
-            amazon_video_util.save_completed_job(job, output_folder=output_folder)
-            st.success(f"Saved video to {file_path}")
-        else:
-            # st.success(f"{invocation_id}: {file_path}")
-            with open(file_path, "rb") as video_file:
+        if os.path.isfile(filename):
+            with open(filename, "rb") as video_file:
                 video_bytes = video_file.read()
                 st.video(video_bytes)
+                if prompt:
+                    st.info(prompt)
+        logging.info(f"{i}: {filename} (not found)")
+
+        if i == 4:
+            break
 
 
 
