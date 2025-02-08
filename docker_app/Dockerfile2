@@ -1,7 +1,7 @@
 FROM --platform=linux/amd64 python:3.12
 EXPOSE 8501
 RUN apt-get -y update && apt-get install -y --no-install-recommends \
-         python3-opencv \
+         libgl1 \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY requirements.txt ./requirements.txt
