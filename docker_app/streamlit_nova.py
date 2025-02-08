@@ -33,6 +33,10 @@ st.title("🌇 Image and Video Generation with Amazon Nova 🎨")
 # Setup AWS
 bedrock_runtime = boto3.client('bedrock-runtime')
 s3_client = boto3.client("s3")
+ssm = boto3.client('ssm')
+
+response = ssm.get_parameter(Name='/streamlit/STREAMLIT_S3_BUCKET')
+STREAMLIT_S3_BUCKET = response['Parameter']['Value']
 
 # ID of Secrets Manager containing cognito parameters
 secrets_manager_id = config_file.Config.SECRETS_MANAGER_ID
@@ -245,7 +249,7 @@ def tab_reel():
     if st.button("Generate Video"):
         if prompt:
             try:
-                invocation_arn = generate_video(prompt)
+                invocation_arn = generate_video(STREAMLIT_S3_BUCKET, prompt)
                 st.success(f"Video generation job started: {invocation_arn}")
                 st.write(json.dumps(response, indent=2, default=str))
             except Exception as e:
