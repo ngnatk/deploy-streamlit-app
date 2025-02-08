@@ -257,7 +257,7 @@ def job_json_from_arn(invocation_arn):
 
 
 def item_to_dynamodb(table, item):
-    logging.info(item)
+    logging.info(f"item_to_dynamodb(): item={item}")
     if isinstance(item['submit_time'], datetime.date):
         item['submit_time'] = item['submit_time'].isoformat()
 
@@ -377,7 +377,7 @@ def tab_reel():
             try:
                 job_json = job_json_from_arn(arn)
                 job_json['prompt'] = video_prompt
-                logging.info(job_json)
+                logging.info(f"job_json = {job_json}")
                 item_to_dynamodb(DYNAMODB_TABLE, job_json)
 
             except Exception as e:
@@ -398,17 +398,18 @@ def tab_videos():
         submit_time = item.get('submit_time', '')
         if status == 'InProgress':
             if prompt:
-                st.info(f"[InProgress] Job ID: {id}. Submit time = {submit_time}. Prompt = {prompt}")
+                st.markdown(f'[InProgress] **Job ID**: `{id}`. **Submit time** = `{submit_time}`. **Prompt** = `{prompt}`')
             else:
-                st.info(f"[InProgress] Job ID: {id}. Submit time = {submit_time}.")
+                st.info(f'`[InProgress]` **Job ID**: `{id}`. **Submit time** = `{submit_time}`.')
             item_str = json.dumps(item, indent=2, default=str)
-            logging.info(item_str)
+            logging.info(f"tab_videos(): item = {item_str}")
             arn = f'arn:aws:bedrock:us-east-1:{AWS_ACCOUNT_ID}:async-invoke/{id}'
             job_json = job_json_from_arn(arn)
             new_status = job_json['status']
             if new_status != status:
+                item['status'] = new_status
                 logging.info(f"{id}: {status} -> {new_status}")
-                item_to_dynamodb(DYNAMODB_TABLE, job_json)
+                item_to_dynamodb(DYNAMODB_TABLE, item)
                 # Copy the file fro the S3 bucket to temporary storage
                 s3_client.download_file(STREAMLIT_S3_BUCKET, f'{id}/output.mp4', f'{id}.mp4')
 
@@ -424,12 +425,12 @@ def tab_videos():
             if os.path.isfile(filename):
                 with open(filename, "rb") as video_file:
                     video_bytes = video_file.read()
+                    st.info(f'"{prompt}" ({filename})')
                     st.video(video_bytes)
-                    st.info(prompt)
             else:
-                logging.info(f"{i}: {filename} (not found)")
+                logging.info(f"Video {i}: {filename} (not found)")
         else:
-            logging.info(f"{i}: {filename} (prompt not found)")
+            logging.info(f"Video {i}: {filename} (prompt not found)")
 
         if i == 4:
             break
