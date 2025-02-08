@@ -13,6 +13,7 @@ import datetime
 import file_utils
 import json
 import logging
+import os
 import random
 import streamlit as st
 
@@ -29,6 +30,7 @@ st.set_page_config(
     layout="wide"
 )
 st.title("🌇 Image and Video Generation with Amazon Nova 🎨")
+output_folder="output"
 
 # Setup AWS
 bedrock_runtime = boto3.client('bedrock-runtime')
@@ -104,6 +106,37 @@ def generate_image(prompt, negative_prompt, guidance_scale, num_inference_steps,
 
 
 
+def remove_background(source_image_base64, source_image_path=None):
+    """
+    Removes background from an image. Adapted from:
+    https://github.com/aws-samples/amazon-nova-samples/blob/main/multimodal-generation/image-generation/python/07_background_removal.py
+    """
+
+    if source_image_path is not None:
+        with open(source_image_path, "rb") as image_file:
+            source_image_base64 = base64.b64encode(image_file.read()).decode("utf8")
+
+    inference_params = {
+        "taskType": "BACKGROUND_REMOVAL",
+        "backgroundRemovalParams": {
+            "image": source_image_base64,
+        },
+    }
+
+    generation_id = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    output_directory = f"output/{generation_id}"
+    generator = BedrockImageGenerator(output_directory=output_directory)
+    response = generator.generate_images(inference_params)
+
+    if "images" in response:
+        image = file_utils.save_base64_images(response["images"], output_directory, "image")
+    return response, image
+
+
+# The following subroutines: generate_video(), check_job_status(), list_job_statuses(),
+# and monitor_recent_jobs() were adapted from:
+# https://github.com/aws-samples/amazon-nova-samples/blob/main/multimodal-generation/video-generation/python/01_text_to_video_generation.py
+
 def generate_video(s3_destination_bucket, video_prompt, model_id="amazon.nova-reel-v1:0"):
     """
     Generate a video using the provided prompt.
@@ -111,9 +144,6 @@ def generate_video(s3_destination_bucket, video_prompt, model_id="amazon.nova-re
     Args:
         s3_destination_bucket (str): The S3 bucket where the video will be stored
         video_prompt (str): Text prompt describing the desired video
-
-    Adapted from:
-    https://github.com/aws-samples/amazon-nova-samples/blob/main/multimodal-generation/video-generation/python/01_text_to_video_generation.py
     """
 
     model_input = {
@@ -153,35 +183,51 @@ def generate_video(s3_destination_bucket, video_prompt, model_id="amazon.nova-re
 
     except Exception as e:
         logger.error(e)
+        st.error(f"Error: {e}")
         return None
 
 
 
-def remove_background(source_image_base64, source_image_path=None):
-    """
-    Removes background from an image. Adapted from:
-    https://github.com/aws-samples/amazon-nova-samples/blob/main/multimodal-generation/image-generation/python/07_background_removal.py
-    """
+def check_job_status(invocation_arn):
+    """Check status of a specific job using get_async_invoke()"""
+    try:
+        response = bedrock_runtime.get_async_invoke(
+            invocationArn=invocation_arn
+        )
+        
+        status = response["status"]
+        logger.info(f"Status: {status}")
+        logger.info("\nFull response:")
+        logger.info(json.dumps(response, indent=2, default=str))
+        return response
+    except Exception as e:
+        logger.error(f"Error checking job status: {e}")
+        return None
 
-    if source_image_path is not None:
-        with open(source_image_path, "rb") as image_file:
-            source_image_base64 = base64.b64encode(image_file.read()).decode("utf8")
 
-    inference_params = {
-        "taskType": "BACKGROUND_REMOVAL",
-        "backgroundRemovalParams": {
-            "image": source_image_base64,
-        },
-    }
 
-    generation_id = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    output_directory = f"output/{generation_id}"
-    generator = BedrockImageGenerator(output_directory=output_directory)
-    response = generator.generate_images(inference_params)
+def list_job_statuses(max_results=10, status_filter="InProgress"):
+    """List all video generation jobs with optional filtering"""
+    try:
+        invocation = bedrock_runtime.list_async_invokes(
+            maxResults=max_results,
+            statusEquals=status_filter,
+        )
+        
+        logger.info("Invocation Jobs:")
+        logger.info(json.dumps(invocation, indent=2, default=str))
+        return invocation
+    except Exception as e:
+        logger.error(f"Error listing jobs: {e}")
+        return None
 
-    if "images" in response:
-        image = file_utils.save_base64_images(response["images"], output_directory, "image")
-    return response, image
+
+
+def monitor_recent_jobs(duration_hours=1):
+    """Monitor and download videos from the past N hours"""
+    from_submit_time = datetime.datetime.now(datetime.timezone.utc) \
+        - datetime.timedelta(hours=duration_hours)
+    return amazon_video_util.monitor_and_download_videos("output", submit_time_after=from_submit_time)
 
 
 
@@ -249,19 +295,45 @@ def tab_reel():
     if st.button("Generate Video"):
         if prompt:
             try:
-                invocation_arn = generate_video(
+                st.session_state.invocation_arn = generate_video(
                     s3_destination_bucket = STREAMLIT_S3_BUCKET,
                     video_prompt = prompt
                 )
-                st.success(f"Video generation job started: {invocation_arn}")
-                st.write(json.dumps(response, indent=2, default=str))
+                st.success(f"Video generation job started: {st.session_state.invocation_arn}")
+                st.markdown(f"response = {json.dumps(response, indent=2, default=str)}")
             except Exception as e:
                 st.error(f"Error generating video: {str(e)}")
         else:
             st.warning("Please enter a prompt to generate a video")
 
+    inprogress_job_args = {"statusEquals": "InProgress"}
+    inprogress_jobs = bedrock_runtime.list_async_invokes(**inprogress_job_args)
+    for job in inprogress_jobs["asyncInvokeSummaries"]:
+        status = job["status"]
+        st.status(f"Job status: {status}")
+
+    completed_jobs_args = {"statusEquals": "Completed"}
+    completed_jobs = bedrock_runtime.list_async_invokes(**completed_jobs_args)
+    for job in completed_jobs["asyncInvokeSummaries"]:
+        job_folder_name = amazon_video_util.get_folder_name_for_job(job)
+        invocation_id = job['invocationArn'].split("/")[-1]
+        filename = f"{invocation_id}.mp4"
+        file_path = f"{output_folder}/{job_folder_name}/{filename}"
+        if not os.path.isfile(file_path):
+            amazon_video_util.save_completed_job(job, output_folder=output_folder)
+            st.success(f"Saved video to {file_path}")
+        else:
+            # st.success(f"{invocation_id}: {file_path}")
+            with open(file_path, "rb") as video_file:
+                video_bytes = video_file.read()
+                st.video(video_bytes)
+
+
 
 def main():
+    if "invocation_arn" not in st.session_state:
+        st.session_state.invocation_arn = ""
+
     tab1, tab2, tab3 = st.tabs(["Canvas", "Background Removal", "Reel"])
 
     with tab1:
