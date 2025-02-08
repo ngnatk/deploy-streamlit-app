@@ -139,6 +139,7 @@ class CdkStack(Stack):
                                                 "dynamodb:PutItem",
                                                 "dynamodb:Scan",
                                                 "s3:GetObject",
+                                                "s3:PutObject",
                                                 "ssm:GetParameter"
                                             ],
                                             resources=["*"]
