@@ -39,6 +39,8 @@ ssm = boto3.client('ssm')
 
 response = ssm.get_parameter(Name='/streamlit/STREAMLIT_S3_BUCKET')
 STREAMLIT_S3_BUCKET = response['Parameter']['Value']
+response = ssm.get_parameter(Name='/streamlit/DYNAMODB_TABLE')
+DYNAMODB_TABLE = response['Parameter']['Value']
 
 # ID of Secrets Manager containing cognito parameters
 secrets_manager_id = config_file.Config.SECRETS_MANAGER_ID
@@ -64,7 +66,7 @@ with st.sidebar:
     st.button("Logout", "logout_btn", on_click=logout)
 
 
-def generate_image(prompt, negative_prompt, guidance_scale, num_inference_steps, seed=None, width=1280, height=720, num_images=1):
+def generate_image(prompt, negative_prompt, quality="standard", seed=None, width=1280, height=720, num_images=1):
     """
     Generate images using Nova Canvas
     """
@@ -72,10 +74,6 @@ def generate_image(prompt, negative_prompt, guidance_scale, num_inference_steps,
     if seed is None:
         seed = random.randint(0, 858993459)
 
-    request_body = {
-        "cfg_scale": guidance_scale,
-        "steps": num_inference_steps,
-    }
     inference_params = {
         "taskType": "TEXT_IMAGE",
         "textToImageParams": {
@@ -84,7 +82,7 @@ def generate_image(prompt, negative_prompt, guidance_scale, num_inference_steps,
         },
         "imageGenerationConfig": {
             "numberOfImages": num_images,  # Number of variations to generate. 1 to 5.
-            "quality": "standard",  # Allowed values are "standard" and "premium"
+            "quality": quality,  # Allowed values are "standard" and "premium"
             "width": width,  # See README for supported output resolutions
             "height": height,  # See README for supported output resolutions
             "cfgScale": 7.0,  # How closely the prompt will be followed
@@ -166,7 +164,7 @@ def generate_video(s3_destination_bucket, video_prompt, model_id="amazon.nova-re
         invocation = bedrock_runtime.start_async_invoke(
             modelId=model_id,
             modelInput=model_input,
-            outputDataConfig={"s3OutputDataConfig": {"s3Uri": f"s3://{s3_destination_bucket}"}},
+            outputDataConfig={"s3OutputDataConfig": {"s3Uri": f"s3://{s3_destination_bucket}/nova"}},
         )
 
         # Store the invocation ARN
@@ -231,29 +229,55 @@ def monitor_recent_jobs(duration_hours=1):
 
 
 
-def tab_canvas():
-    st.sidebar.header("Model Parameters")
+def job_json_from_arn(invocation_arn):
+    job = bedrock_runtime.get_async_invoke(invocationArn=invocation_arn)
+    arn = job['invocationArn']
+    job_id = arn.split("/")[-1]
+    status = job['status']
+    submit_time = job['submitTime']
+    try:
+        s3_uri = job['outputDataConfig']['s3OutputDataConfig']['s3Uri']
+    except Exception as e:
+        s3_uri = ''
 
+    return {
+        'id': job_id,
+        'status': status,
+        'submit_time': submit_time,
+        's3_uri': s3_uri
+    }
+
+
+
+def item_to_dynamodb(table, item):
+    response = dynamodb.put_item(
+        TableName=table,
+        Item=item
+    )
+    return response
+
+
+
+def tab_canvas():
     prompt = st.text_area("Enter your image prompt:", height=100)
 
     # Model parameters
-    negative_prompt = st.sidebar.text_area("Negative Prompt:", 
-        value="blurry, bad anatomy, bad hands, cropped, worst quality")
-    num_inference_steps = st.sidebar.slider("Number of Inference Steps", 
-        min_value=1, max_value=100, value=50)
-    guidance_scale = st.sidebar.slider("Guidance Scale", 
-        min_value=1.0, max_value=20.0, value=7.5, step=0.5)
-    seed = st.sidebar.number_input("Seed", min_value=0, value=42)
-    width = st.sidebar.select_slider("Image Width", 
-        options=[512, 768, 1024], value=512)
-    height = st.sidebar.select_slider("Image Height", 
-        options=[512, 768, 1024], value=512)
+    with st.sidebar:
+        st.header("Model Parameters")
+        negative_prompt = st.text_area("Negative Prompt:", 
+            value="blurry, bad anatomy, bad hands, cropped, worst quality")
+        quality = st.radio("Quality", options=["standard", "premium"])
+        seed = st.number_input("Seed", min_value=0, value=42)
+        width = st.sidebar.select_slider("Image Width", 
+            options=[512, 768, 1024], value=512)
+        height = st.select_slider("Image Height", 
+            options=[512, 768, 1024], value=512)
 
     if st.button("Generate Image"):
         if prompt:
             try:
                 with st.spinner():
-                    response, image = generate_image(prompt, negative_prompt, guidance_scale, num_inference_steps, seed, width, height)
+                    response, image = generate_image(prompt, negative_prompt, quality, seed, width, height)
                     
                     if 'images' in response:
                         # Decode and display the generated image
@@ -295,17 +319,25 @@ def tab_reel():
     if st.button("Generate Video"):
         if prompt:
             try:
-                st.session_state.invocation_arn = generate_video(
+                arn = generate_video(
                     s3_destination_bucket = STREAMLIT_S3_BUCKET,
                     video_prompt = prompt
                 )
-                st.success(f"Video generation job started: {st.session_state.invocation_arn}")
+                st.session_state.invocation_arn = arn
+
+                st.success(f"Video generation job started: {arn}")
                 st.markdown(f"response = {json.dumps(response, indent=2, default=str)}")
+                job_json = job_json_from_arn(arn)
+                item_to_dynamodb(DYNAMODB_TABLE, job_json)
+
             except Exception as e:
                 st.error(f"Error generating video: {str(e)}")
         else:
             st.warning("Please enter a prompt to generate a video")
 
+
+
+def tab_videos():
     inprogress_job_args = {"statusEquals": "InProgress"}
     inprogress_jobs = bedrock_runtime.list_async_invokes(**inprogress_job_args)
     for job in inprogress_jobs["asyncInvokeSummaries"]:
@@ -334,7 +366,7 @@ def main():
     if "invocation_arn" not in st.session_state:
         st.session_state.invocation_arn = ""
 
-    tab1, tab2, tab3 = st.tabs(["Canvas", "Background Removal", "Reel"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Canvas", "Background Removal", "Reel", "Videos"])
 
     with tab1:
         tab_canvas()
@@ -344,6 +376,9 @@ def main():
 
     with tab3:
         tab_reel()
+
+    with tab4:
+        tab_videos()
 
 
 
