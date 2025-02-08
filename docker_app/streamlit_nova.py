@@ -266,10 +266,10 @@ def item_to_dynamodb(table, item):
             TableName=table,
             Item={
                 'id': {'S': item['id']},
-                'prompt': {'S': item['prompt']},
-                'submit_time': {'S': item['submit_time']},
-                'status': {'S': item['status']},
-                's3_uri': {'S': item['s3_uri']}
+                'prompt': {'S': item.get('prompt', '')},
+                'submit_time': {'S': item.get('submit_time', '')},
+                'status': {'S': item.get('status', '')},
+                's3_uri': {'S': item.get('s3_uri' , '')}
             }
         )
     except ClientError as err:
@@ -393,9 +393,14 @@ def tab_videos():
     logging.info(f"len(items_inprogress) = {len(items_inprogress)}")
     for item in items_inprogress:
         id = item['id']
-        status = item['status']
+        status = item.get('status', '')
+        prompt = item.get('prompt', '')
+        submit_time = item.get('submit_time', '')
         if status == 'InProgress':
-            st.info(f"Job: {id} (InProgress)")
+            if prompt:
+                st.info(f"[InProgress] Job ID: {id}. Submit time = {submit_time}. Prompt = {prompt}")
+            else:
+                st.info(f"[InProgress] Job ID: {id}. Submit time = {submit_time}.")
             item_str = json.dumps(item, indent=2, default=str)
             logging.info(item_str)
             arn = f'arn:aws:bedrock:us-east-1:{AWS_ACCOUNT_ID}:async-invoke/{id}'
@@ -415,13 +420,16 @@ def tab_videos():
         status = item['status']
         prompt = item.get('prompt', '')
         filename = f"{invocation_id}.mp4"
-        if os.path.isfile(filename):
-            with open(filename, "rb") as video_file:
-                video_bytes = video_file.read()
-                st.video(video_bytes)
-                if prompt:
+        if prompt:
+            if os.path.isfile(filename):
+                with open(filename, "rb") as video_file:
+                    video_bytes = video_file.read()
+                    st.video(video_bytes)
                     st.info(prompt)
-        logging.info(f"{i}: {filename} (not found)")
+            else:
+                logging.info(f"{i}: {filename} (not found)")
+        else:
+            logging.info(f"{i}: {filename} (prompt not found)")
 
         if i == 4:
             break
