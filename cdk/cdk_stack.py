@@ -136,6 +136,7 @@ class CdkStack(Stack):
                                                 "bedrock:InvokeModel",
                                                 "dynamodb:GetItem",
                                                 "dynamodb:PutItem",
+                                                "dynamodb:Scan",
                                                 "ssm:GetParameter"
                                             ],
                                             resources=["*"]
