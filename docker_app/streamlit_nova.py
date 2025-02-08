@@ -249,7 +249,10 @@ def tab_reel():
     if st.button("Generate Video"):
         if prompt:
             try:
-                invocation_arn = generate_video(STREAMLIT_S3_BUCKET, prompt)
+                invocation_arn = generate_video(
+                    s3_destination_bucket = STREAMLIT_S3_BUCKET,
+                    video_prompt = prompt
+                )
                 st.success(f"Video generation job started: {invocation_arn}")
                 st.write(json.dumps(response, indent=2, default=str))
             except Exception as e:
